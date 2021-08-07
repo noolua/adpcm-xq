@@ -63,7 +63,7 @@ static void free_p(void *p){
 
 typedef struct adpcm_decoder_s{
     size_t num_samples, sample_cousume;
-    int num_channels, block_size, samples_per_block;
+    int num_channels, block_size, samples_per_block, sample_rate;
     uint32_t source_cosume;
     uint8_t *adpcm_block;
     int16_t *pcm_block;
@@ -124,7 +124,7 @@ adpcm_decoder_t *decoder_create(){
 
 // return ADPCM_ERR_XXX
 int decoder_init(adpcm_decoder_t *decoder, adpcm_progm_t *source){
-    int format = 0, res = 0, bits_per_sample, sample_rate, num_channels, samples_per_block;
+    int format = 0, bits_per_sample, sample_rate, num_channels, samples_per_block;
     uint32_t fact_samples = 0;
     size_t num_samples = 0;
     RiffChunkHeader *riff_chunk_header;
@@ -260,13 +260,10 @@ int decoder_init(adpcm_decoder_t *decoder, adpcm_progm_t *source){
         return ADPCM_ERR_ALLOC_MEMORY;
     }
 
-    // // decode data
-    // if (format == WAVE_FORMAT_IMA_ADPCM) {
-    //     res = adpcm_decode_data (infile, outfile, num_channels, num_samples, WaveHeader.BlockAlign);
-    // }
     decoder->samples_per_block = samples_per_block;
     decoder->num_channels = num_channels;
     decoder->num_samples = num_samples;
+    decoder->sample_rate = sample_rate;
     decoder->block_size = wave_header.BlockAlign;
     decoder->pcm_block = pcm_block;
     decoder->adpcm_block = adpcm_block;
@@ -301,6 +298,7 @@ int decoder_next_block(adpcm_decoder_t *decoder, pcm_block_t *block){
         block->samples = decoder->pcm_block;
         block->num_channels = decoder->num_channels;
         block->num_samples = this_block_pcm_samples;
+        block->sample_rate = decoder->sample_rate;
         if(decoder->num_samples > decoder->sample_cousume)
             return ADPCM_ERR_CONTINUE;
     }
@@ -340,7 +338,7 @@ int main () {
         return ret;
     }
     while((ret = decoder_next_block(decoder, &block)) >= ADPCM_ERR_OK){
-        fprintf(stderr, "block -> samples: %d, num_channels: %d\n", block.num_samples, block.num_channels);
+        fprintf(stderr, "block -> rate: %d,  samples: %d, num_channels: %d\n", block.sample_rate, block.num_samples, block.num_channels);
         if(ret == ADPCM_ERR_OK){
             fprintf(stderr, "decoder_next_block done\n");
             break;

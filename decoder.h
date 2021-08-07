@@ -15,7 +15,7 @@ enum{
 
 typedef struct pcm_block_s {
   int16_t *samples;
-  int32_t num_samples, num_channels;
+  int32_t num_samples, num_channels, sample_rate;
 }pcm_block_t;
 
 typedef struct adpcm_progm_s{
