@@ -1,5 +1,9 @@
 #ifndef __decoder_h__
 #define __decoder_h__
+#ifdef __cplusplus
+extern "C" {
+#endif // __cplusplus
+
 #include <stdint.h>
 
 enum{
@@ -18,10 +22,11 @@ typedef struct pcm_block_s {
   int32_t num_samples, num_channels, sample_rate;
 }pcm_block_t;
 
-typedef struct adpcm_progm_s{
-  const uint32_t content_size;
-  uint8_t content[0];
-}adpcm_progm_t;
+typedef struct adpcm_reader_s{
+  int (*read)(void* reader, void *buffer, size_t buff_sz);
+  int (*skip)(void* reader, size_t buff_sz);
+  void *reader;
+}adpcm_reader_t;
 
 typedef struct adpcm_decoder_s adpcm_decoder_t;
 
@@ -34,7 +39,7 @@ adpcm_decoder_t *decoder_create();
 /*
   return ADPCM_ERR_OK mean source in valid, other mean a error.
 */
-int decoder_init(adpcm_decoder_t *decoder, adpcm_progm_t *source);
+int decoder_init(adpcm_decoder_t *decoder, adpcm_reader_t *reader);
 
 /*
 return ADPCM_ERR_OK mean decode complete, ADPCM_ERR_CONTIUNE mean have next block.
@@ -47,6 +52,9 @@ int decoder_next_block(adpcm_decoder_t *decoder, pcm_block_t *block);
 */
 int decoder_destroy(adpcm_decoder_t *decoder);
 
+#ifdef __cplusplus
+}
+#endif // __cplusplus
 
 
 #endif // __decoder_h__

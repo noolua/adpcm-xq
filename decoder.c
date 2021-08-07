@@ -67,21 +67,8 @@ typedef struct adpcm_decoder_s{
     uint32_t source_cosume;
     uint8_t *adpcm_block;
     int16_t *pcm_block;
-    adpcm_progm_t *source;
+    adpcm_reader_t *reader;
 }adpcm_decoder_t;
-
-static void* decoder_source_map2type(adpcm_decoder_t *decoder, uint32_t type_sz){
-    uint8_t *hold = decoder->source->content + decoder->source_cosume;
-    decoder->source_cosume += type_sz;
-    return hold;
-}
-
-static int decoder_source_read2type(adpcm_decoder_t *decoder, void *ty_buffer, uint32_t type_sz){
-    void *hold = decoder->source->content + decoder->source_cosume;
-    memcpy(ty_buffer, hold, type_sz);
-    decoder->source_cosume += type_sz;
-    return (int)type_sz;
-}
 
 static void little_endian_to_native (void *data, char *format) {
     unsigned char *cp = (unsigned char *) data;
@@ -123,27 +110,31 @@ adpcm_decoder_t *decoder_create(){
 }
 
 // return ADPCM_ERR_XXX
-int decoder_init(adpcm_decoder_t *decoder, adpcm_progm_t *source){
+int decoder_init(adpcm_decoder_t *decoder, adpcm_reader_t *reader){
     int format = 0, bits_per_sample, sample_rate, num_channels, samples_per_block;
     uint32_t fact_samples = 0;
     size_t num_samples = 0;
-    RiffChunkHeader *riff_chunk_header;
+    RiffChunkHeader riff_chunk_header;
     ChunkHeader chunk_header;
     WaveHeader wave_header;
 
-    if(!decoder || !source) return ADPCM_ERR_ARGS;
-    memset(decoder, 0, sizeof(adpcm_progm_t));
-    decoder->source = source;
+    if(!decoder || !reader) return ADPCM_ERR_ARGS;
+    memset(decoder, 0, sizeof(adpcm_decoder_t));
+    decoder->reader = reader;
 
     // PARSE HEADER
-    riff_chunk_header = (RiffChunkHeader*)decoder_source_map2type(decoder, sizeof(RiffChunkHeader));
-    if(strncmp(riff_chunk_header->ckID, "RIFF", 4) || strncmp(riff_chunk_header->formType, "WAVE", 4))
+    if(reader->read(reader->reader, &riff_chunk_header, sizeof(RiffChunkHeader)) <= 0){
+        return ADPCM_ERR_INVALID_FILE;
+    }
+    if(strncmp(riff_chunk_header.ckID, "RIFF", 4) || strncmp(riff_chunk_header.formType, "WAVE", 4))
         return ADPCM_ERR_INVALID_FILE;
 
     // read initial RIFF form header
     // loop through all elements of the RIFF wav header (until the data chuck)
     while (1) {
-        decoder_source_read2type(decoder, &chunk_header, sizeof(ChunkHeader));
+        if(reader->read(reader->reader, &chunk_header, sizeof(ChunkHeader)) <= 0){
+            return ADPCM_ERR_INVALID_FILE;
+        }
         little_endian_to_native (&chunk_header, ChunkHeaderFormat);
         // if it's the format chunk, we want to get some info out of there and
         // make sure it's a .wav file we can handle
@@ -151,7 +142,7 @@ int decoder_init(adpcm_decoder_t *decoder, adpcm_progm_t *source){
             int supported = 1;
 
             if (chunk_header.ckSize < 16 || chunk_header.ckSize > sizeof (WaveHeader) ||
-                !decoder_source_read2type(decoder, &wave_header, chunk_header.ckSize)) {
+                reader->read(reader->reader, &wave_header, chunk_header.ckSize) <= 0) {
                 return ADPCM_ERR_INVALID_FILE;
             }
             little_endian_to_native (&wave_header, WaveHeaderFormat);
@@ -181,13 +172,13 @@ int decoder_init(adpcm_decoder_t *decoder, adpcm_progm_t *source){
         }
         else if (!strncmp (chunk_header.ckID, "fact", 4)) {
 
-            if (chunk_header.ckSize < 4 || !decoder_source_read2type (decoder, &fact_samples, sizeof (fact_samples))) {
+            if (chunk_header.ckSize < 4 || reader->read(reader->reader, &fact_samples, sizeof (fact_samples)) <= 0) {
                 return ADPCM_ERR_INVALID_FILE;
             }
 
             if (chunk_header.ckSize > 4) {
                 int bytes_to_skip = chunk_header.ckSize - 4;
-                decoder_source_map2type(decoder, bytes_to_skip);
+                reader->skip(reader->reader, bytes_to_skip);
             }
         }
         else if (!strncmp (chunk_header.ckID, "data", 4)) {
@@ -241,7 +232,7 @@ int decoder_init(adpcm_decoder_t *decoder, adpcm_progm_t *source){
         }
         else {          // just ignore unknown chunks
             int bytes_to_eat = (chunk_header.ckSize + 1) & ~1L;
-            decoder_source_map2type(decoder, bytes_to_eat);
+            reader->skip(reader->reader, bytes_to_eat);
         }
     }
 
@@ -273,8 +264,10 @@ int decoder_init(adpcm_decoder_t *decoder, adpcm_progm_t *source){
 
 int decoder_next_block(adpcm_decoder_t *decoder, pcm_block_t *block){
     int samples_per_block, num_samples;
+    adpcm_reader_t *reader;
     if(!decoder || !block)
         return ADPCM_ERR_ARGS;
+    reader = decoder->reader;
     samples_per_block = decoder->samples_per_block;
     num_samples = decoder->num_samples - decoder->sample_cousume;
 
@@ -287,9 +280,10 @@ int decoder_next_block(adpcm_decoder_t *decoder, pcm_block_t *block){
             decoder->block_size = (this_block_adpcm_samples - 1) / (decoder->num_channels ^ 3) + (decoder->num_channels * 4);
             this_block_pcm_samples = num_samples;
         }
-        // decoder->adpcm_block = decoder_source_map2type(decoder, decoder->block_size);
-        decoder_source_read2type(decoder, decoder->adpcm_block, decoder->block_size);
 
+        if(reader->read(reader->reader, decoder->adpcm_block, decoder->block_size) <= 0){
+            return ADPCM_ERR_INVALID_FILE;
+        }
         if (adpcm_decode_block (decoder->pcm_block, decoder->adpcm_block, decoder->block_size, decoder-> num_channels) != this_block_adpcm_samples) {
             return ADPCM_ERR_DECODE_BLOCK;
         }
@@ -321,18 +315,66 @@ int decoder_destroy(adpcm_decoder_t *decoder){
 }
 
 #ifdef __TEST_DECODER__
-// gcc -O2 -D__DBG_MALLOC__ -D__TEST_DECODER__ adpcm-lib.c decoder.c -o decoder
+/*
+gcc -O2 -D__DBG_MALLOC__ -D__TEST_DECODER__ adpcm-lib.c decoder.c -o decoder
+
+*/
+
 #include "data/one.h"
+typedef struct adpcm_progm_s{
+  const uint32_t content_size;
+  uint8_t content[0];
+}adpcm_progm_t;
+
+typedef struct progm_reader_s{
+    adpcm_progm_t *progm;
+    uint32_t position;
+}progm_reader_t;
+
+static int progm_reader_read(void *r, void * buff, size_t buff_sz){
+    progm_reader_t *reader;
+    if(!r || !buff) return -1;
+    reader = (progm_reader_t *)r;
+    if(reader->position >= reader->progm->content_size) return -1;
+    if(reader->position + buff_sz <= reader->progm->content_size){
+        uint8_t *hold = reader->progm->content + reader->position;
+        memcpy(buff, hold, buff_sz);
+        reader->position += buff_sz;
+        return (int)buff_sz;
+    }
+    return -1;
+}
+
+static int progm_skip(void* r, size_t buff_sz){
+    progm_reader_t *reader;
+    if(!r) return -1;
+    reader = (progm_reader_t *)r;
+    if(reader->position >= reader->progm->content_size) return -1;
+    if(reader->position + buff_sz <= reader->progm->content_size){
+        reader->position += buff_sz;
+        return (int)buff_sz;
+    }
+    return -1;
+}
+
 int main () {
     int ret;
-    adpcm_progm_t *source = (adpcm_progm_t *)adpcm_one;
+    progm_reader_t progm_reader = {
+        .progm = (adpcm_progm_t *)adpcm_one,
+        .position = 0
+    };
+    adpcm_reader_t reader = {
+        .read = progm_reader_read,
+        .skip = progm_skip,
+        .reader = &progm_reader
+    };
     pcm_block_t block;
     adpcm_decoder_t *decoder = decoder_create();
     if(!decoder){
         fprintf(stderr, "decoder_create fail\n");
         return ADPCM_ERR_ALLOC_MEMORY;
     }
-    ret = decoder_init(decoder, source);
+    ret = decoder_init(decoder, &reader);
     if(ret != ADPCM_ERR_OK){
         fprintf(stderr, "decoder_init error: %d\n", ret);
         return ret;
